@@ -634,7 +634,21 @@ async function updateMemory(){
 
 let mealB64=null,mealMime=null;
 document.getElementById('meal-drop').addEventListener('click',()=>document.getElementById('meal-file').click());
-document.getElementById('meal-file').addEventListener('change',async e=>{const f=e.target.files[0];if(!f)return;try{const {b64,mime,url}=await readImg(f);mealB64=b64;mealMime=mime;const p=document.getElementById('meal-prev');p.src=url;p.style.display='block';document.getElementById('meal-go').classList.remove('hidden');document.getElementById('meal-verdict').style.display='none'}catch(err){const u=/unsupported/i.test(String(err&&err.message));toast(u?"That photo format isn't supported (often iPhone HEIC). Set Camera → Formats to 'Most Compatible', or pick a JPEG/PNG from your library.":"Couldn't load that photo — try another, or pick from your library instead of the camera");}});
+document.getElementById('meal-file').addEventListener('change',async e=>{
+  const f=e.target.files[0];
+  if(!f){dbg('No file came back from the picker.');return;}
+  dbg('Loading photo… name='+(f.name||'?')+', type='+(f.type||'(none)')+', size='+Math.round((f.size||0)/1024)+'KB');
+  try{
+    const {b64,mime,url}=await readImg(f);
+    if(!b64){dbg('Photo loaded but produced no data. Try picking from your library instead of the camera.');return;}
+    mealB64=b64;mealMime=mime;
+    const p=document.getElementById('meal-prev');if(p&&url){p.src=url;p.style.display='block';}
+    document.getElementById('meal-go').classList.remove('hidden');
+    dbg('Photo ready ('+mime+', ~'+Math.round(b64.length/1024)+'KB encoded). Tap "Ask Alek to look".');
+  }catch(err){
+    dbg('Could not load that photo: '+(err&&err.message||err)+'\nTry picking from your library instead of the camera.');
+  }
+});
 document.getElementById('meal-go').addEventListener('click',analyzeMeal);
 let scanMode='plate';
 const SCAN={
@@ -654,20 +668,35 @@ function setScan(m){scanMode=m;document.querySelectorAll('.smode').forEach(s=>s.
   document.getElementById('meal-verdict').style.display='none';
 }
 async function analyzeMeal(){
-  if(!mealB64)return;const btn=document.getElementById('meal-go');btn.textContent='Alek is looking…';btn.disabled=true;
+  if(!mealB64){dbg('No image loaded yet — pick a photo first.');return;}
+  if(!S.apiKey){dbg('No API key set. You tab → Connect Alek\'s brain.');return;}
+  const btn=document.getElementById('meal-go');btn.textContent='Alek is looking…';btn.disabled=true;
   const dn=DIETS.find(d=>d[0]===S.diet);const sc=SCAN[scanMode];
+  dbg('Sending… mime='+mealMime+', base64 length='+(mealB64?mealB64.length:0)+', key starts '+String(S.apiKey).slice(0,7)+'…');
   const prompt=`You are Alek, a warm weight-loss friend for ${S.name||'your friend'} doing a ${dn?dn[1]:'balanced'} approach (notes: ${S.notes||'none'}). ${sc.ask}
 Respond ONLY with JSON, no markdown: {"verdict":"good"|"mix"|"pass","headline":"one short friendly line","note":"2-4 warm, specific, non-shaming sentences. Friend tone, never preachy.","summary":"≤8 words plain summary of what was in the image for your own memory"}`;
   try{
     const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:aiHeaders(),body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:1000,messages:[{role:"user",content:[{type:"image",source:{type:"base64",media_type:mealMime,data:mealB64}},{type:"text",text:prompt}]}]})});
-    if(!r.ok){let detail='';try{const er=await r.json();detail=er&&er.error&&er.error.message?er.error.message:JSON.stringify(er);}catch{detail='HTTP '+r.status;}throw new Error(detail);}
-    const data=await r.json();let txt=(data.content||[]).filter(c=>c.type==='text').map(c=>c.text).join('').trim().replace(/```json|```/g,'').trim();
+    const rawText=await r.text();
+    console.log('[Alek] status',r.status,r.statusText);console.log('[Alek] body',rawText);
+    if(!r.ok){
+      let detail=rawText;try{const er=JSON.parse(rawText);detail=(er.error&&er.error.message)||rawText;}catch{}
+      dbg('HTTP '+r.status+' '+r.statusText+'\n'+detail);
+      throw new Error('status '+r.status);
+    }
+    let data;try{data=JSON.parse(rawText);}catch{dbg('Got a 200 but body was not JSON:\n'+rawText.slice(0,400));throw new Error('bad json');}
+    let txt=(data.content||[]).filter(c=>c.type==='text').map(c=>c.text).join('').trim().replace(/```json|```/g,'').trim();
+    if(!txt){dbg('200 OK but no text in response. Raw:\n'+rawText.slice(0,400));}
     let o;try{o=JSON.parse(txt)}catch{o={verdict:'mix',headline:'Here’s my take',note:txt}}
     showVerdict(o);
     if(o.summary){S.mealLog=S.mealLog||[];S.mealLog.push({mode:scanMode,summary:o.summary,d:today()});if(S.mealLog.length>40)S.mealLog=S.mealLog.slice(-40);save()}
     if(S.voiceOn&&o.note)speak(o.headline+'. '+o.note);
-  }catch(e){const msg=String(e&&e.message||'');const isType=/media_type|image|unsupported|format/i.test(msg);showVerdict({verdict:'mix',headline:S.apiKey?(isType?'That photo format tripped me up':'Hmm, I couldn’t see clearly'):'Add your API key first',note:S.apiKey?(isType?"Looks like an unsupported image format (often iPhone HEIC). In your Camera settings turn on 'Most Compatible', or pick the photo from your library and I'll take another look.":"My connection hiccuped — "+(msg?'('+msg+') ':'')+"try snapping it again and I'll look. I'm not going anywhere."):"Vision needs your Anthropic API key — add it under the You tab → Connect Alek's brain, then snap again."})}finally{btn.textContent='Ask Alek to look';btn.disabled=false}
+  }catch(e){
+    console.log('[Alek] threw',e);
+    dbg('Request failed: '+(e&&e.message||e)+'\nIf this says "Failed to fetch", it is a network/CORS/connectivity issue, not your image.');
+  }finally{btn.textContent='Ask Alek to look';btn.disabled=false}
 }
+function dbg(msg){const v=document.getElementById('meal-verdict');if(!v)return;v.style.display='block';const tag=document.getElementById('meal-tag');if(tag){tag.className='tag mix';tag.textContent='⚙ debug';}const t=document.getElementById('meal-text');if(t){t.innerHTML='<b>Diagnostic</b><pre style="white-space:pre-wrap;font-size:12px;margin:6px 0 0;color:var(--ink-2)">'+String(msg).replace(/</g,'&lt;')+'</pre>';}}
 function showVerdict(o){const v=document.getElementById('meal-verdict');v.style.display='block';const tag=document.getElementById('meal-tag');const map={good:['good','✓ Looks great'],mix:['mix','◐ A few tweaks'],pass:['pass','○ Maybe pass']};const m=map[o.verdict]||map.mix;tag.className='tag '+m[0];tag.textContent=m[1];document.getElementById('meal-text').innerHTML='<b>'+(o.headline||'')+'</b>'+(o.note||'')}
 
 function logWeight(){
@@ -731,10 +760,70 @@ function saveProfile(){S.goal=num('prof-goal');save();renderHome();toast('Plan u
 function saveKey(){S.apiKey=val('prof-key');save();renderYou();toast(S.apiKey?'AI coach connected ✓':'Key cleared')}
 function wipe(){if(confirm('Erase everything on this device? This cannot be undone.')){try{localStorage.removeItem(KEY)}catch(e){}_mem={};S={...blank};location.reload()}}
 
-/* The Anthropic API only accepts jpeg, png, gif, webp. iPhone photos are often HEIC,
-   which must be re-encoded to JPEG via canvas before sending. We NEVER send raw HEIC. */
+/* The Anthropic API accepts jpeg, png, gif, webp.
+   Strategy: try to re-encode to JPEG via canvas (handles HEIC + shrinks big photos).
+   If canvas fails (common in iOS standalone Home-Screen WebView), fall back to sending
+   the ORIGINAL file bytes — but only if the file is already an API-supported type.
+   A hard timeout guarantees this never hangs (which looked like "nothing happens"). */
 const OK_MIME=['image/jpeg','image/png','image/gif','image/webp'];
-function readImg(file,max=1400){return new Promise((res,rej)=>{const r=new FileReader();r.onerror=()=>rej(new Error('read'));r.onload=()=>{const raw=r.result;const img=new Image();img.onload=()=>{try{let{width:w,height:h}=img;const sc=Math.min(1,max/Math.max(w,h));const c=document.createElement('canvas');c.width=Math.max(1,Math.round(w*sc));c.height=Math.max(1,Math.round(h*sc));c.getContext('2d').drawImage(img,0,0,c.width,c.height);const url=c.toDataURL('image/jpeg',0.82);const b64=url.split(',')[1];if(!b64)return rej(new Error('encode'));res({url,b64,mime:'image/jpeg'})}catch(err){/* canvas tainted/failed — only use raw bytes if already an API-supported type */const t=(file.type||'').toLowerCase();if(OK_MIME.includes(t)){const b64=String(raw).split(',')[1];res({url:String(raw),b64,mime:t})}else{rej(new Error('unsupported'))}}};img.onerror=()=>{/* decode failed (often HEIC). Raw HEIC is NOT accepted by the API. Only pass through raw bytes if the file is already a supported type; otherwise fail loudly so the user gets a real message. */const t=(file.type||'').toLowerCase();if(OK_MIME.includes(t)){const b64=String(raw).split(',')[1];if(b64)return res({url:String(raw),b64,mime:t})}rej(new Error('unsupported'))};img.src=raw};r.readAsDataURL(file)})}
+function fileToB64(file){
+  // Reliable raw-bytes path that does NOT depend on canvas.
+  return new Promise((res,rej)=>{
+    const r=new FileReader();
+    r.onerror=()=>rej(new Error('FileReader failed'));
+    r.onload=()=>{const s=String(r.result||'');const i=s.indexOf(',');res(i>=0?s.slice(i+1):'');};
+    r.readAsDataURL(file);
+  });
+}
+function readImg(file,max=1400){
+  return new Promise((resolve,reject)=>{
+    let done=false;
+    const finish=v=>{if(!done){done=true;resolve(v);}};
+    const fail=e=>{if(!done){done=true;reject(e);}};
+    const t=(file.type||'').toLowerCase();
+
+    // Fallback: send original bytes if the type is already supported.
+    const rawFallback=async(why)=>{
+      try{
+        if(!OK_MIME.includes(t)){return fail(new Error((why?why+'; ':'')+'unsupported format '+(t||'unknown')+' and could not convert'));}
+        const b64=await fileToB64(file);
+        if(!b64)return fail(new Error('empty file data'));
+        finish({url:'data:'+t+';base64,'+b64,b64,mime:t});
+      }catch(err){fail(err);}
+    };
+
+    // Hard timeout so the UI can never freeze silently.
+    const timer=setTimeout(()=>{if(!done){rawFallback('timed out re-encoding');}},6000);
+    const wrapFinish=v=>{clearTimeout(timer);finish(v);};
+    const wrapFail=e=>{clearTimeout(timer);fail(e);};
+
+    const fr=new FileReader();
+    fr.onerror=()=>{clearTimeout(timer);rawFallback('could not read file');};
+    fr.onload=()=>{
+      const dataUrl=fr.result;
+      const img=new Image();
+      img.onload=()=>{
+        try{
+          let{width:w,height:h}=img;
+          if(!w||!h){clearTimeout(timer);return rawFallback('zero-size decode');}
+          const sc=Math.min(1,max/Math.max(w,h));
+          const c=document.createElement('canvas');
+          c.width=Math.max(1,Math.round(w*sc));c.height=Math.max(1,Math.round(h*sc));
+          const ctx=c.getContext('2d');
+          if(!ctx){clearTimeout(timer);return rawFallback('no 2d context');}
+          ctx.drawImage(img,0,0,c.width,c.height);
+          const url=c.toDataURL('image/jpeg',0.82);
+          const b64=url.split(',')[1];
+          if(!b64){clearTimeout(timer);return rawFallback('canvas produced no data');}
+          wrapFinish({url,b64,mime:'image/jpeg'});
+        }catch(err){clearTimeout(timer);rawFallback('canvas error '+(err&&err.message||''));}
+      };
+      img.onerror=()=>{clearTimeout(timer);rawFallback('image decode failed (often HEIC)');};
+      img.src=dataUrl;
+    };
+    fr.readAsDataURL(file);
+  });
+}
 function toast(t){const e=document.getElementById('toast');e.textContent=t;e.classList.add('show');clearTimeout(e._t);e._t=setTimeout(()=>e.classList.remove('show'),3300)}
 function today(){return new Date().toISOString().slice(0,10)}
 function yday(){const d=new Date();d.setDate(d.getDate()-1);return d.toISOString().slice(0,10)}
