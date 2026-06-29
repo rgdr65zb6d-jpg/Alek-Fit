@@ -395,11 +395,12 @@
           <div class="smode" data-m="menu" onclick="setScan('menu')">📋 Menu</div>
           <div class="smode" data-m="fridge" onclick="setScan('fridge')">🧊 Fridge</div>
         </div>
-        <label class="drop" id="meal-drop">
+        <div class="drop" id="meal-drop" role="button" tabindex="0">
           <div class="gi"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="15" rx="3"/><circle cx="12" cy="12.5" r="3.5"/><path d="M8 5l1.5-2h5L16 5"/></svg></div>
-          <b style="font-size:14.5px">Tap to snap or upload</b>
+          <b style="font-size:14.5px">Tap to choose a photo</b>
           <p class="muted" style="margin:5px 0 0" id="drop-hint">Your plate, a snack — whatever</p>
-          <input type="file" accept="image/*" capture="environment" id="meal-file" class="hidden" />
+        </div>
+        <input type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/*" id="meal-file" class="hidden" />
         </label>
         <img class="preview" id="meal-prev" />
         <button class="btn gold hidden" id="meal-go" style="margin-top:4px">Ask Alek to look</button>
@@ -444,6 +445,13 @@
         <div class="field" style="margin-top:12px"><label>Anthropic API key</label><input id="prof-key" type="password" placeholder="sk-ant-…" /></div>
         <button class="btn ghost" onclick="saveKey()">Save key</button>
         <p class="muted" id="key-status" style="margin-top:8px;font-size:11.5px"></p>
+      </div>
+      <div class="card">
+        <p class="eyebrow">Diagnostics</p>
+        <h2>Meal scanner self-test</h2>
+        <p class="muted" style="margin-bottom:12px">If meal photos aren't working, tap this. It tests each step and shows exactly what fails.</p>
+        <button class="btn gold" onclick="runSelfTest()">Run self-test</button>
+        <pre id="selftest-out" style="white-space:pre-wrap;font-size:12px;line-height:1.5;margin:12px 0 0;color:var(--ink-2);font-family:ui-monospace,Menlo,monospace"></pre>
       </div>
       <div class="card">
         <p class="eyebrow">Voice</p>
@@ -633,7 +641,13 @@ async function updateMemory(){
 }
 
 let mealB64=null,mealMime=null;
-document.getElementById('meal-drop').addEventListener('click',()=>document.getElementById('meal-file').click());
+/* meal-drop is now a plain div + separate input. One explicit trigger, no label,
+   no double-fire. This is the reliable pattern for iOS standalone (Home Screen). */
+(function(){const d=document.getElementById('meal-drop'),fi=document.getElementById('meal-file');
+  const open=()=>fi.click();
+  d.addEventListener('click',open);
+  d.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();open();}});
+})();
 document.getElementById('meal-file').addEventListener('change',async e=>{
   const f=e.target.files[0];
   if(!f){dbg('No file came back from the picker.');return;}
@@ -759,6 +773,74 @@ function addAlarm(title,time){toast('Open Clock → Alarms → + · set '+fmtTim
 function saveProfile(){S.goal=num('prof-goal');save();renderHome();toast('Plan updated')}
 function saveKey(){S.apiKey=val('prof-key');save();renderYou();toast(S.apiKey?'AI coach connected ✓':'Key cleared')}
 function wipe(){if(confirm('Erase everything on this device? This cannot be undone.')){try{localStorage.removeItem(KEY)}catch(e){}_mem={};S={...blank};location.reload()}}
+
+/* ---- DIAGNOSTICS: bisect the meal-scan pipeline, print results on screen ---- */
+const TEST_PNG='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='; // valid 1x1 red PNG
+async function runSelfTest(){
+  const out=document.getElementById('selftest-out');const lines=[];
+  const log=(s)=>{lines.push(s);out.textContent=lines.join('\n');};
+  log('Running…');lines.length=0;
+
+  // 1. Environment
+  const standalone=(window.navigator.standalone===true)||window.matchMedia('(display-mode: standalone)').matches;
+  log('1. Environment');
+  log('   Origin: '+location.origin);
+  log('   Protocol: '+location.protocol);
+  log('   Standalone (Home Screen): '+standalone);
+  log('   Online: '+navigator.onLine);
+
+  // 2. Elements present
+  const haveDrop=!!document.getElementById('meal-drop');
+  const haveFile=!!document.getElementById('meal-file');
+  const haveGo=!!document.getElementById('meal-go');
+  log('2. UI wired');
+  log('   drop='+haveDrop+' fileInput='+haveFile+' button='+haveGo);
+
+  // 3. API key
+  log('3. API key');
+  if(!S.apiKey){log('   ✗ No key set. Add it above, then re-run.');return;}
+  log('   Present, starts '+String(S.apiKey).slice(0,8)+'… length '+S.apiKey.length);
+  if(/\s/.test(S.apiKey))log('   ⚠ Key contains a space or newline — that breaks auth!');
+
+  // 4. Canvas capability (the thing that fails in standalone)
+  log('4. Canvas encode test');
+  try{
+    const c=document.createElement('canvas');c.width=4;c.height=4;const ctx=c.getContext('2d');
+    ctx.fillStyle='#f00';ctx.fillRect(0,0,4,4);
+    const u=c.toDataURL('image/jpeg',0.8);
+    log('   Canvas toDataURL: '+(u&&u.startsWith('data:image/jpeg')?'✓ works':'✗ returned junk'));
+  }catch(e){log('   ✗ Canvas blew up: '+e.message);}
+
+  // 5. The decisive test: a real image API call with a known-good tiny PNG.
+  log('5. Image API call (tiny test image)');
+  try{
+    const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:aiHeaders(),
+      body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:30,messages:[{role:"user",content:[
+        {type:"image",source:{type:"base64",media_type:"image/png",data:TEST_PNG}},
+        {type:"text",text:"Reply with the single word OK."}]}]})});
+    const body=await r.text();
+    log('   HTTP '+r.status+' '+r.statusText);
+    if(r.ok){
+      let data;try{data=JSON.parse(body);}catch{}
+      const txt=data&&data.content?data.content.filter(c=>c.type==='text').map(c=>c.text).join(''):'';
+      log('   ✓ Image API WORKS. Model said: '+(txt||'(no text)').trim());
+      log('   → So the problem is your PHOTO, not the API. Pick from Library, not Camera.');
+    }else{
+      let msg=body;try{msg=(JSON.parse(body).error||{}).message||body;}catch{}
+      log('   ✗ API rejected it: '+msg);
+      if(r.status===401)log('   → Key is invalid/revoked.');
+      else if(r.status===400&&/credit|balance/i.test(msg))log('   → Out of API credits. Add credits at console.anthropic.com.');
+      else if(r.status===429)log('   → Rate limited. Wait a moment.');
+      else if(r.status>=500)log('   → Anthropic server issue, try again shortly.');
+    }
+  }catch(e){
+    log('   ✗ fetch threw: '+e.message);
+    log('   → This is NETWORK/CORS, not the image. If standalone=true and this fails');
+    log('     but chat works, the WebView is blocking it. Re-add to Home Screen from the');
+    log('     https GitHub Pages URL, or use it in Safari directly.');
+  }
+  log('Done.');
+}
 
 /* The Anthropic API accepts jpeg, png, gif, webp.
    Strategy: try to re-encode to JPEG via canvas (handles HEIC + shrinks big photos).
