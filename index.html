@@ -2,6 +2,9 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+<meta http-equiv="Pragma" content="no-cache" />
+<meta http-equiv="Expires" content="0" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -360,6 +363,18 @@
         <div class="act" onclick="go('reveal')"><span class="arrow">→</span><div class="gi"><svg viewBox="0 0 24 24"><path d="M12 3l2.2 5.8L20 11l-5.8 2.2L12 19l-2.2-5.8L4 11l5.8-2.2z"/></svg></div><b>The reveal</b><small>Before & after</small></div>
       </div>
 
+      <div class="card" id="daily-log-card">
+        <div style="display:flex;justify-content:space-between;align-items:baseline">
+          <p class="eyebrow">Today · Alek's log</p>
+          <span id="carb-total" style="font-size:12px;color:var(--gold-hi);font-weight:640"></span>
+        </div>
+        <h2 style="margin-bottom:10px">What you've had</h2>
+        <div id="daily-log-list"></div>
+        <button class="btn ghost" style="margin-top:12px" onclick="showRecap('day')">See today's recap</button>
+        <button class="btn ghost" style="margin-top:8px" onclick="showRecap('week')">See this week's recap</button>
+        <div id="recap-out" style="margin-top:12px"></div>
+      </div>
+
       <div class="card">
         <p class="eyebrow">Check-in</p>
         <h2 id="ci-q">How's the day going so far?</h2>
@@ -490,6 +505,7 @@
         <button class="btn ghost" style="margin-top:12px" onclick="wipe()">Erase everything</button>
       </div>
       <p class="disclaimer">Alek is a supportive companion, not medical advice. Talk to a licensed professional about real health decisions. If your relationship with food or your body starts to feel distressing, please reach out to someone you trust or a professional.</p>
+      <p class="disclaimer" id="build-stamp" style="opacity:.6"></p>
     </section>
   </main>
 
@@ -508,7 +524,7 @@
 const KEY='alek.v2';
 const DIETS=[['balanced','Balanced','Flexible, whole-food'],['lowcarb','Low-carb','Fewer starches'],['keto','Keto','Very low carb, higher fat'],['mediterranean','Mediterranean','Veg, fish, olive oil'],['highprotein','High-protein','Protein-forward'],['if','Fasting','Eating windows'],['plant','Plant-based','Mostly / all plants'],['nosugar','No added sugar','Cut the sweet stuff']];
 const REMINDERS=[['morning','Morning kickoff','08:00','A word of intention'],['lunch','Midday check','12:30','How’s the day going?'],['snack','Afternoon nudge','15:30','Beat the 3pm cravings'],['dinner','Dinner plan','18:00','Let’s plan a good plate'],['evening','Evening reflect','21:00','Wins & tomorrow’s setup']];
-const blank={name:'',cur:null,start:null,goal:null,diet:'balanced',notes:'',weighDay:'Monday',reminders:{morning:true,lunch:true,snack:false,dinner:true,evening:true},weights:[],photos:[],chat:[],streak:0,lastOpen:null,onboarded:false,apiKey:'',memory:'',voiceOn:false,mealLog:[],whyText:'',whyPhoto:''};
+const blank={name:'',cur:null,start:null,goal:null,diet:'balanced',notes:'',weighDay:'Monday',reminders:{morning:true,lunch:true,snack:false,dinner:true,evening:true},weights:[],photos:[],chat:[],streak:0,lastOpen:null,onboarded:false,apiKey:'',memory:'',voiceOn:false,mealLog:[],whyText:'',whyPhoto:'',journal:[],lastRecap:null,lastWeekRecap:null};
 let S=load();
 let _mem={};
 function load(){try{const r=localStorage.getItem(KEY);return{...blank,...JSON.parse(r||_mem[KEY]||'{}')}}catch{try{return{...blank,...JSON.parse(_mem[KEY]||'{}')}}catch{return{...blank}}}}
@@ -530,6 +546,56 @@ function go(v){VIEWS.forEach(x=>document.getElementById('v-'+x).classList.toggle
 
 function boot(){renderObDiets();renderObRem();if(!S.onboarded){document.getElementById('onboard').classList.remove('hidden');return}document.getElementById('onboard').classList.add('hidden');const t=today();if(S.lastOpen!==t){S.streak=S.lastOpen===yday()?(S.streak||0)+1:1;S.lastOpen=t;save()}document.getElementById('streak-n').textContent=S.streak||1;renderChat();renderHome()}
 function curW(){return S.weights.length?S.weights[S.weights.length-1].w:S.cur}
+
+/* ===== AGENT JOURNAL: structured log Alek builds silently from conversation ===== */
+function jAdd(entry){
+  // entry: {type:'meal'|'mood'|'note', ...}
+  S.journal=S.journal||[];
+  entry.id='j'+Date.now()+Math.random().toString(36).slice(2,6);
+  entry.d=entry.d||today();
+  entry.t=entry.t||new Date().toTimeString().slice(0,5);
+  entry.ts=Date.now();
+  S.journal.push(entry);
+  if(S.journal.length>600)S.journal=S.journal.slice(-600);
+  save();
+  try{if(document.getElementById('v-home').classList.contains('active'))renderHome();}catch(_){}
+}
+function jForDay(d){d=d||today();return (S.journal||[]).filter(e=>e.d===d);}
+function jCarbsForDay(d){return jForDay(d).filter(e=>e.type==='meal'&&typeof e.carbs==='number').reduce((a,e)=>a+e.carbs,0);}
+function jMealsForDay(d){return jForDay(d).filter(e=>e.type==='meal');}
+function jRemove(id){S.journal=(S.journal||[]).filter(e=>e.id!==id);save();renderHome();}
+function daysAgo(n){const dt=new Date();dt.setDate(dt.getDate()-n);return dt.toISOString().slice(0,10);}
+function last7Days(){const out=[];for(let i=6;i>=0;i--)out.push(daysAgo(i));return out;}
+async function showRecap(span){
+  const box=document.getElementById('recap-out');if(!box)return;
+  box.innerHTML='<p class="muted" style="padding:6px 0">Alek is putting it together…</p>';
+  if(!S.apiKey){box.innerHTML='<p class="muted">Add your API key in the You tab and Alek can write you a recap.</p>';return;}
+  let scope,label;
+  if(span==='week'){
+    const days=last7Days();
+    scope=days.map(d=>{const meals=jMealsForDay(d);const carbs=jCarbsForDay(d);const w=(S.weights.find(x=>x.d===d)||{}).w;
+      const moods=jForDay(d).filter(e=>e.type==='mood').map(e=>e.text);
+      const notes=jForDay(d).filter(e=>e.type==='note').map(e=>e.kind+': '+e.text);
+      return `${d}: ${meals.length} meals (~${carbs}g carbs)${w?', weight '+w+'lb':''}${moods.length?', mood: '+moods.join('/'):''}${notes.length?', '+notes.join('; '):''}`;
+    }).join('\n');
+    label='this week';
+  }else{
+    const d=today();const meals=jMealsForDay(d);const carbs=jCarbsForDay(d);
+    const moods=jForDay(d).filter(e=>e.type==='mood').map(e=>e.text);
+    const notes=jForDay(d).filter(e=>e.type==='note').map(e=>e.kind+': '+e.text);
+    scope=`Meals: ${meals.map(m=>m.summary+' (~'+(m.carbs||'?')+'g)').join('; ')||'none'}\nTotal carbs: ~${carbs}g\nMood/energy: ${moods.join('; ')||'none noted'}\nWins/struggles: ${notes.join('; ')||'none noted'}`;
+    label='today';
+  }
+  const dn=DIETS.find(d=>d[0]===S.diet);
+  const sys=`You are Alek, a warm weight-loss friend for ${S.name||'your friend'} (${dn?dn[1]:'balanced'} approach). Write a short, friendly recap of ${label} like a friend who's been keeping their log. 3-5 sentences. Mention the carb total naturally, note one pattern or win you noticed, and end with one gentle, doable suggestion. Never shame, never clinical. No bullet points, no headers — just warm text.`;
+  try{
+    const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:aiHeaders(),body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:400,system:sys,messages:[{role:'user',content:`Here is ${label}'s log:\n${scope}`}]})});
+    if(!r.ok){box.innerHTML='<p class="muted">Couldn\'t reach Alek for the recap — try again in a moment.</p>';return;}
+    const data=await r.json();const txt=(data.content||[]).filter(c=>c.type==='text').map(c=>c.text).join('').trim();
+    box.innerHTML=`<div class="why-live no-photo" style="margin:0"><div class="why-body"><p class="why-eye">${label==='this week'?'Weekly recap':'Today\'s recap'}</p><p class="why-quote" style="font-style:normal">${escapeHtml(txt)}</p></div></div>`;
+    if(S.voiceOn&&txt)speak(txt);
+  }catch(e){box.innerHTML='<p class="muted">Couldn\'t write the recap just now.</p>';}
+}
 function renderHome(){
   document.getElementById('greet-name').textContent=S.name||'friend';
   const h=new Date().getHours();document.getElementById('greet-time').textContent=h<12?'good morning':h<18?'good afternoon':'good evening';
@@ -545,6 +611,22 @@ function renderHome(){
   const ring=document.getElementById('ring-fg');const C=2*Math.PI*104;ring.style.strokeDasharray=C;ring.style.strokeDashoffset=C;
   requestAnimationFrame(()=>requestAnimationFrame(()=>{ring.style.strokeDashoffset=C*(1-pct/100)}));
   renderWhyBanner();
+  renderDailyLog();
+}
+function renderDailyLog(){
+  const list=document.getElementById('daily-log-list');if(!list)return;
+  const items=jForDay(today()).slice().sort((a,b)=>a.ts-b.ts);
+  const carbs=jCarbsForDay(today());
+  const ct=document.getElementById('carb-total');if(ct)ct.textContent=jMealsForDay(today()).length?('~'+carbs+'g carbs'):'';
+  if(!items.length){list.innerHTML='<p class="muted" style="padding:6px 0">Nothing yet today. Just talk to Alek about your day — meals, how you feel, a win — and it shows up here automatically. No forms.</p>';return;}
+  const icon={meal:'🍽',mood:'💭',note:'🤍'};
+  list.innerHTML=items.map(e=>{
+    let main='',sub='';
+    if(e.type==='meal'){main=e.summary;sub=(e.meal?e.meal+' · ':'')+(e.carbs!=null?'~'+e.carbs+'g carbs':'')+(e.note?' · '+e.note:'');}
+    else if(e.type==='mood'){main=e.text;sub=e.kind;}
+    else{main=e.text;sub=e.kind==='struggle'?'tough moment':'win';}
+    return `<div class="log-item" style="align-items:flex-start"><span style="font-size:16px">${icon[e.type]||'•'}</span><div style="flex:1"><b style="font-size:13.5px">${escapeHtml(main||'')}</b>${sub?`<small style="display:block;color:var(--ink-3)">${escapeHtml(sub)} · ${e.t}</small>`:''}</div><button onclick="jRemove('${e.id}')" style="background:none;border:none;color:var(--ink-3);font-size:16px;cursor:pointer;padding:0 4px">×</button></div>`;
+  }).join('');
 }
 function renderWhyBanner(){
   const b=document.getElementById('why-banner');if(!b)return;
@@ -570,9 +652,12 @@ function recentTrend(){
   return `overall ${(first-last>=0?'down':'up')} ${Math.abs(first-last).toFixed(1)} lb since start; last change ${dir}`;
 }
 function recentMeals(){
-  if(!S.mealLog||!S.mealLog.length)return 'none logged yet';
-  return S.mealLog.slice(-5).map(m=>m.mode+': '+m.summary).join('; ');
+  const today_meals=jMealsForDay(today());
+  if(today_meals.length)return today_meals.map(m=>m.summary+(m.carbs!=null?' (~'+m.carbs+'g)':'')).join('; ');
+  if(S.mealLog&&S.mealLog.length)return S.mealLog.slice(-5).map(m=>m.mode+': '+m.summary).join('; ');
+  return 'none logged yet';
 }
+function todayCarbLine(){const c=jCarbsForDay(today());const n=jMealsForDay(today()).length;return n?`${n} meal(s) logged today, ~${c}g carbs so far`:'nothing logged yet today';}
 function systemPrompt(){const dn=DIETS.find(d=>d[0]===S.diet);const cur=curW();return `You are Alek, a warm, emotionally intelligent personal weight-loss companion for ${S.name||'your friend'}. Talk like a supportive friend who happens to know nutrition — never clinical, preachy, or shaming. Keep replies short and human (2-5 sentences), like texting a friend in your corner.
 
 Context:
@@ -580,9 +665,12 @@ Context:
 - Eating style: ${dn?dn[1]+' ('+dn[2]+')':'balanced'}.
 - Notes/allergies: ${S.notes||'none given'}.
 - Weight trend: ${recentTrend()}.
+- Today's log: ${todayCarbLine()}.
 - Recent meals you've seen: ${recentMeals()}.
 ${S.memory?'- What you remember about them: '+S.memory:''}
 ${S.whyText?'- Their deeper "why" (use this to motivate on hard days, reflect it back gently when they struggle): "'+S.whyText+'"':''}
+
+You quietly keep their daily log for them — when they mention a meal, weight, mood, or a win/struggle, it gets recorded automatically in the background (you don't have to announce it every time, but you can naturally acknowledge it like a friend would: "nice, that's a solid lunch" — they'll see it appear in their log). Never make them fill out forms.
 
 Use what you remember to feel like a coach who knows them — reference their patterns naturally when relevant ("you mentioned afternoons are tough"), but don't recite the list. When they're struggling or slipping, and they've shared a "why," gently bring it back to reconnect them to it — not as a lecture, as a friend reminding them who they are.
 
@@ -604,6 +692,7 @@ async function aiReply(){
     const data=await r.json();const txt=(data.content||[]).filter(c=>c.type==='text').map(c=>c.text).join('\n').trim()||"I'm here. Tell me a little more?";
     think.remove();pushAI(txt);
     if(S.voiceOn) speak(txt);
+    runAgent();
     if(S.chat.length%8===0) updateMemory();
   }catch(e){think.remove();pushAI(S.apiKey?"I couldn't reach my brain just now — check your connection and try again. I'm still here when you're ready.":"To chat with me on this device, add your Anthropic API key under the You tab → Connect Alek's brain. Takes a minute, and everything else works without it.")}finally{send.disabled=false}
 }
@@ -638,6 +727,77 @@ async function updateMemory(){
     const data=await r.json();const m=(data.content||[]).filter(c=>c.type==='text').map(c=>c.text).join('').trim();
     if(m&&m.length<800){S.memory=m;save()}
   }catch(e){}
+}
+
+/* ===== THE AGENT: silently reads the conversation and logs for you ===== */
+const AGENT_TOOLS=[
+  {name:'log_meal',description:'Record a meal or snack the person mentioned eating (or planning to eat right now). Estimate carbs in grams from typical portions. Infer reasonable portions — do NOT ask the person for details.',
+   input_schema:{type:'object',properties:{
+     summary:{type:'string',description:'Short plain description, e.g. "2 scrambled eggs + avocado toast"'},
+     meal:{type:'string',enum:['breakfast','lunch','dinner','snack'],description:'Which meal slot'},
+     carbs:{type:'number',description:'Estimated carbohydrates in grams for the portion eaten'},
+     note:{type:'string',description:'Optional one-line nutrition observation, friendly not preachy'}
+   },required:['summary','carbs']}},
+  {name:'log_weight',description:'Record a body weight the person stated (e.g. "I weighed 212 today"). Only when they give an actual number.',
+   input_schema:{type:'object',properties:{lb:{type:'number',description:'Weight in pounds'}},required:['lb']}},
+  {name:'log_mood',description:'Record mood, energy, or a craving the person expressed (e.g. "I\'m exhausted", "craving sugar bad", "feeling great today").',
+   input_schema:{type:'object',properties:{
+     kind:{type:'string',enum:['mood','energy','craving'],description:'Category'},
+     text:{type:'string',description:'Short capture in plain words, e.g. "low energy after lunch"'}
+   },required:['kind','text']}},
+  {name:'log_note',description:'Record a meaningful win or struggle worth remembering (e.g. "skipped the donuts at the office", "stress-ate last night").',
+   input_schema:{type:'object',properties:{
+     kind:{type:'string',enum:['win','struggle'],description:'Win or struggle'},
+     text:{type:'string',description:'Short capture in plain words'}
+   },required:['kind','text']}}
+];
+function handleAgentTool(name,inp){
+  try{
+    if(name==='log_meal'){
+      jAdd({type:'meal',summary:inp.summary||'a meal',meal:inp.meal||'snack',carbs:typeof inp.carbs==='number'?Math.round(inp.carbs):null,note:inp.note||''});
+      flicker('Logged: '+(inp.summary||'meal')+(typeof inp.carbs==='number'?' • ~'+Math.round(inp.carbs)+'g carbs':''));
+      return 'logged meal';
+    }
+    if(name==='log_weight'){
+      const v=parseFloat(inp.lb);if(!v)return 'no weight';
+      const t=today();const ex=S.weights.find(w=>w.d===t);if(ex)ex.w=v;else S.weights.push({d:t,w:v});
+      S.weights.sort((a,b)=>a.d<b.d?-1:1);save();try{drawSpark();}catch(_){}renderHome();
+      flicker('Logged weight: '+v+' lb');return 'logged weight';
+    }
+    if(name==='log_mood'){jAdd({type:'mood',kind:inp.kind||'mood',text:inp.text||''});flicker('Noted: '+(inp.text||inp.kind));return 'logged mood';}
+    if(name==='log_note'){jAdd({type:'note',kind:inp.kind||'win',text:inp.text||''});flicker((inp.kind==='struggle'?'Noted a tough moment':'Noted a win')+' 🤍');return 'logged note';}
+  }catch(e){return 'error';}
+  return 'unknown tool';
+}
+let _agentBusy=false;
+async function runAgent(){
+  if(!S.apiKey||_agentBusy)return;_agentBusy=true;
+  try{
+    // Only look at the most recent exchange so we don't re-log old turns.
+    const recent=S.chat.slice(-6).map(m=>({role:m.role==='assistant'?'assistant':'user',content:m.text}));
+    if(!recent.length)return;
+    const sys=`You are the silent logging engine behind Alek, a weight-loss companion for ${S.name||'the user'} (eating style: ${(DIETS.find(d=>d[0]===S.diet)||[])[1]||'balanced'}).
+Read ONLY the latest user message in context. If it mentions food eaten/about to be eaten, a weight number, a mood/energy/craving, or a clear win/struggle, call the matching tool(s) to log it. Estimate carbs from normal portions — never ask for clarification. If nothing is worth logging, respond with just the word NONE and call no tools. Do not write any other commentary. Never double-log something already clearly logged.`;
+    const body={model:"claude-sonnet-4-6",max_tokens:600,system:sys,tools:AGENT_TOOLS,messages:recent};
+    let r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:aiHeaders(),body:JSON.stringify(body)});
+    if(!r.ok)return;
+    let data=await r.json();
+    const calls=(data.content||[]).filter(c=>c.type==='tool_use');
+    if(!calls.length)return;
+    for(const c of calls){handleAgentTool(c.name,c.input||{});}
+  }catch(e){/* logging is best-effort; never disrupt the chat */}
+  finally{_agentBusy=false;}
+}
+/* tiny non-intrusive confirmation that work happened */
+function flicker(msg){
+  try{
+    let el=document.getElementById('agent-flicker');
+    if(!el){el=document.createElement('div');el.id='agent-flicker';
+      el.style.cssText='position:fixed;left:50%;transform:translateX(-50%);bottom:92px;z-index:60;background:linear-gradient(180deg,var(--gold-hi),var(--gold));color:#1c1609;font-size:12.5px;font-weight:640;padding:8px 14px;border-radius:99px;box-shadow:0 10px 30px -10px rgba(0,0,0,.6);opacity:0;transition:opacity .3s,transform .3s;pointer-events:none;max-width:88vw;text-align:center';
+      document.body.appendChild(el);}
+    el.textContent='✓ '+msg;el.style.opacity='1';el.style.transform='translateX(-50%) translateY(0)';
+    clearTimeout(el._t);el._t=setTimeout(()=>{el.style.opacity='0';el.style.transform='translateX(-50%) translateY(6px)';},2600);
+  }catch(_){}
 }
 
 let mealB64=null,mealMime=null;
@@ -914,6 +1074,8 @@ function val(id){return document.getElementById(id).value.trim()}
 function num(id){const v=parseFloat(document.getElementById(id).value);return isNaN(v)?null:v}
 function fmtTime(t){let[h,m]=t.split(':').map(Number);const ap=h<12?'AM':'PM';h=h%12||12;return h+':'+String(m).padStart(2,'0')+' '+ap}
 
+const BUILD='build 2026-06-29 19:40 · agent log';
+try{const bs=document.getElementById('build-stamp');if(bs)bs.textContent=BUILD;}catch(_){}
 try{boot()}catch(e){try{document.getElementById('onboard').classList.remove('hidden')}catch(_){}}
 setTimeout(()=>{const sp=document.getElementById('splash');if(sp)sp.classList.add('gone');setTimeout(()=>{if(sp)sp.remove()},700)},1700);
 </script>
