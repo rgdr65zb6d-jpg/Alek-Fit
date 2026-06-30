@@ -208,6 +208,8 @@
 
   nav{position:fixed;bottom:0;left:0;right:0;z-index:30;max-width:480px;margin:0 auto;background:rgba(14,15,18,.82);backdrop-filter:blur(24px) saturate(1.4);border-top:1px solid var(--hair-soft);padding:8px 6px calc(8px + env(safe-area-inset-bottom));display:flex}
   .tab{flex:1;background:none;border:none;color:var(--ink-3);cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:4px;padding:5px 2px;font-family:inherit;transition:color .25s}
+  .tab.pulse{animation:tabpulse 1.4s ease-in-out infinite}
+  @keyframes tabpulse{0%,100%{color:var(--ink-3)}50%{color:var(--gold-hi)}}
   .tab svg{width:21px;height:21px;stroke:currentColor;fill:none;stroke-width:1.7;transition:.25s}
   .tab span{font-size:9px;letter-spacing:.03em}
   .tab.on{color:var(--gold-hi)}
@@ -442,7 +444,8 @@
         <h2>Before & after</h2>
         <p class="muted">Add a photo at each milestone. Your “after” stays sealed until you reach your goal — then the reveal unlocks.</p>
         <div class="reveal-grid" id="reveal-grid"></div>
-        <label class="btn ghost" style="margin-top:14px">+ Add a milestone photo<input type="file" accept="image/*" capture="user" id="reveal-file" class="hidden" /></label>
+        <button class="btn ghost" style="margin-top:14px" id="reveal-add-btn">+ Add a milestone photo</button>
+        <input type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/*" id="reveal-file" class="hidden" />
       </div>
     </section>
 
@@ -450,7 +453,9 @@
       <div class="card">
         <p class="eyebrow">Check-ins</p>
         <h2>Daily reminders</h2>
-        <p class="muted" style="margin-bottom:6px">Surfaced when you open Alek. “Add to phone” sets a real alarm in your Clock app.</p>
+        <p class="muted" style="margin-bottom:6px">When a check-in is due, Alek greets you with it the next time you open or return to the app. Toggle which ones you want. “Add to phone” sets a backup alarm in your Clock app so you remember to open Alek.</p>
+        <button class="btn ghost" style="margin:8px 0 12px" onclick="enableNotifications()" id="notif-btn">Enable background notifications</button>
+        <p class="muted" style="font-size:11px;margin:-6px 0 12px">Optional. Works when Alek is open in the background. iPhone Home-Screen apps can't fully notify when closed — that's an Apple limitation, so the reliable check-ins are the in-app ones above.</p>
         <div id="rem-list"></div>
       </div>
       <div class="card">
@@ -478,11 +483,11 @@
         <p class="eyebrow">My Why</p>
         <h2>The deeper reason</h2>
         <p class="muted" style="margin-bottom:12px">The real reason underneath the number. Alek holds onto this and brings it back when the days get hard — not a nag, a reminder of who you are.</p>
-        <label class="why-photo" id="why-photo-drop">
+        <div class="why-photo" id="why-photo-drop" role="button" tabindex="0">
           <img id="why-img" />
           <div class="why-add" id="why-add"><svg viewBox="0 0 24 24" width="22" height="22" stroke="var(--gold-hi)" fill="none" stroke-width="1.5"><rect x="3" y="5" width="18" height="15" rx="3"/><circle cx="12" cy="12.5" r="3.5"/><path d="M8 5l1.5-2h5L16 5"/></svg><span>Add a photo that anchors it</span></div>
-          <input type="file" accept="image/*" id="why-file" class="hidden" />
-        </label>
+        </div>
+        <input type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/*" id="why-file" class="hidden" />
         <div class="field" style="margin-top:12px"><label>What's driving you, in your own words</label><textarea id="why-input" rows="4" placeholder="The version of me I'm becoming, who I'm doing this for, the moment I felt most myself…"></textarea></div>
         <button class="btn gold" onclick="saveWhy()">Save my why</button>
       </div>
@@ -524,7 +529,7 @@
 const KEY='alek.v2';
 const DIETS=[['balanced','Balanced','Flexible, whole-food'],['lowcarb','Low-carb','Fewer starches'],['keto','Keto','Very low carb, higher fat'],['mediterranean','Mediterranean','Veg, fish, olive oil'],['highprotein','High-protein','Protein-forward'],['if','Fasting','Eating windows'],['plant','Plant-based','Mostly / all plants'],['nosugar','No added sugar','Cut the sweet stuff']];
 const REMINDERS=[['morning','Morning kickoff','08:00','A word of intention'],['lunch','Midday check','12:30','How’s the day going?'],['snack','Afternoon nudge','15:30','Beat the 3pm cravings'],['dinner','Dinner plan','18:00','Let’s plan a good plate'],['evening','Evening reflect','21:00','Wins & tomorrow’s setup']];
-const blank={name:'',cur:null,start:null,goal:null,diet:'balanced',notes:'',weighDay:'Monday',reminders:{morning:true,lunch:true,snack:false,dinner:true,evening:true},weights:[],photos:[],chat:[],streak:0,lastOpen:null,onboarded:false,apiKey:'',memory:'',voiceOn:false,mealLog:[],whyText:'',whyPhoto:'',journal:[],lastRecap:null,lastWeekRecap:null};
+const blank={name:'',cur:null,start:null,goal:null,diet:'balanced',notes:'',weighDay:'Monday',reminders:{morning:true,lunch:true,snack:false,dinner:true,evening:true},weights:[],photos:[],chat:[],streak:0,lastOpen:null,onboarded:false,apiKey:'',memory:'',voiceOn:false,mealLog:[],whyText:'',whyPhoto:'',journal:[],lastRecap:null,lastWeekRecap:null,remSeen:null};
 let S=load();
 let _mem={};
 function load(){try{const r=localStorage.getItem(KEY);return{...blank,...JSON.parse(r||_mem[KEY]||'{}')}}catch{try{return{...blank,...JSON.parse(_mem[KEY]||'{}')}}catch{return{...blank}}}}
@@ -542,9 +547,76 @@ function renderObRem(){document.getElementById('ob-rem').innerHTML=REMINDERS.map
 function toggleRem(id,el){S.reminders[id]=!S.reminders[id];el.classList.toggle('on',S.reminders[id]);save()}
 
 const VIEWS=['home','chat','meal','weight','reveal','you'];
-function go(v){VIEWS.forEach(x=>document.getElementById('v-'+x).classList.toggle('active',x===v));document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('on',t.dataset.tab===v));if(v==='weight')drawSpark();if(v==='reveal')renderReveal();if(v==='you')renderYou();if(v==='chat')scrollMsgs();if(v==='home')renderHome();window.scrollTo(0,0)}
+function go(v){VIEWS.forEach(x=>document.getElementById('v-'+x).classList.toggle('active',x===v));document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('on',t.dataset.tab===v));if(v==='weight')drawSpark();if(v==='reveal')renderReveal();if(v==='you')renderYou();if(v==='chat'){scrollMsgs();try{document.querySelector('.tab[data-tab="chat"]').classList.remove('pulse');}catch(_){}}if(v==='home')renderHome();window.scrollTo(0,0)}
 
-function boot(){renderObDiets();renderObRem();if(!S.onboarded){document.getElementById('onboard').classList.remove('hidden');return}document.getElementById('onboard').classList.add('hidden');const t=today();if(S.lastOpen!==t){S.streak=S.lastOpen===yday()?(S.streak||0)+1:1;S.lastOpen=t;save()}document.getElementById('streak-n').textContent=S.streak||1;renderChat();renderHome()}
+function boot(){renderObDiets();renderObRem();if(!S.onboarded){document.getElementById('onboard').classList.remove('hidden');return}document.getElementById('onboard').classList.add('hidden');const t=today();if(S.lastOpen!==t){S.streak=S.lastOpen===yday()?(S.streak||0)+1:1;S.lastOpen=t;save()}document.getElementById('streak-n').textContent=S.streak||1;renderChat();renderHome();initReminders();}
+
+/* ===== IN-APP REMINDERS & AUTO CHECK-INS =====
+   Note: a Home-Screen web app can't send true push notifications when closed (iOS limit).
+   So these fire when you OPEN or RETURN to the app — Alek greets you with whatever
+   check-in is due that you haven't seen yet today. Reliable and needs no permissions. */
+function nowMins(){const d=new Date();return d.getHours()*60+d.getMinutes();}
+function remTimeMins(hhmm){const[h,m]=hhmm.split(':').map(Number);return h*60+m;}
+function initReminders(){
+  checkDueReminders();
+  // Re-check when the app comes back to the foreground.
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)checkDueReminders();});
+  window.addEventListener('focus',checkDueReminders);
+  // And on a light timer while open.
+  setInterval(checkDueReminders,60*1000);
+}
+function checkDueReminders(){
+  if(!S.onboarded)return;
+  const t=today();
+  if(!S.remSeen||S.remSeen.d!==t)S.remSeen={d:t,ids:[]};
+  const cur=nowMins();
+  const WINDOW=90; // only fire a reminder if we're within 90 min of its time
+  let due=null;
+  for(const r of REMINDERS){
+    if(!S.reminders[r[0]])continue;
+    if(S.remSeen.ids.includes(r[0]))continue;
+    const rt=remTimeMins(r[2]);
+    if(cur<rt)continue; // not time yet
+    if(cur-rt>WINDOW){
+      // Missed window (e.g. opened in the afternoon) — mark seen silently, don't spam.
+      S.remSeen.ids.push(r[0]);
+      continue;
+    }
+    // Within window and due — pick the most recent such reminder.
+    if(!due||remTimeMins(r[2])>remTimeMins(due[2]))due=r;
+  }
+  save();
+  if(!due)return;
+  if(!S.remSeen.ids.includes(due[0])){S.remSeen.ids.push(due[0]);save();}
+  fireReminder(due);
+}
+function fireReminder(r){
+  // r = [id,label,time,sub]
+  const lines={
+    morning:`Morning, ${S.name||'friend'}. ${r[3]} — what's one intention for today?`,
+    lunch:`Midday check-in: ${r[3]} How's it going so far? Tell me what you've eaten and I'll keep track.`,
+    snack:`Afternoon nudge — ${r[3]}. Feeling any cravings? Talk to me before the vending machine wins.`,
+    dinner:`Dinner time. ${r[3]} — what are you thinking of having? Let's make it a good plate.`,
+    evening:`Evening reflect: ${r[3]}. What went well today, and what's one setup for tomorrow?`
+  };
+  const msg=lines[r[0]]||r[3];
+  // Show it as a proactive Alek message in chat (stored, so it persists).
+  pushAI(msg);
+  // Gentle surfacing if they're not already on chat.
+  if(!document.getElementById('v-chat').classList.contains('active')){
+    flicker('Alek has a check-in for you 💬');
+    try{document.querySelector('.tab[data-tab="chat"]').classList.add('pulse');}catch(_){}
+  }
+  // Bonus: real notification if granted and app is open.
+  try{if('Notification' in window && Notification.permission==='granted'){new Notification('Alek',{body:r[3]});}}catch(_){}
+}
+function enableNotifications(){
+  if(!('Notification' in window)){toast('This browser doesn\'t support notifications');return;}
+  Notification.requestPermission().then(p=>{
+    toast(p==='granted'?'Notifications on — works best with Alek open in the background':'Notifications stay off — in-app check-ins still work');
+    renderYou();
+  });
+}
 function curW(){return S.weights.length?S.weights[S.weights.length-1].w:S.cur}
 
 /* ===== AGENT JOURNAL: structured log Alek builds silently from conversation ===== */
@@ -774,7 +846,9 @@ async function runAgent(){
   if(!S.apiKey||_agentBusy)return;_agentBusy=true;
   try{
     // Only look at the most recent exchange so we don't re-log old turns.
-    const recent=S.chat.slice(-6).map(m=>({role:m.role==='assistant'?'assistant':'user',content:m.text}));
+    // The API requires messages to START with a user role — trim any leading assistant turns.
+    let recent=S.chat.slice(-6).map(m=>({role:m.role==='assistant'?'assistant':'user',content:m.text}));
+    while(recent.length&&recent[0].role!=='user')recent.shift();
     if(!recent.length)return;
     const sys=`You are the silent logging engine behind Alek, a weight-loss companion for ${S.name||'the user'} (eating style: ${(DIETS.find(d=>d[0]===S.diet)||[])[1]||'balanced'}).
 Read ONLY the latest user message in context. If it mentions food eaten/about to be eaten, a weight number, a mood/energy/craving, or a clear win/struggle, call the matching tool(s) to log it. Estimate carbs from normal portions — never ask for clarification. If nothing is worth logging, respond with just the word NONE and call no tools. Do not write any other commentary. Never double-log something already clearly logged.`;
@@ -848,7 +922,7 @@ async function analyzeMeal(){
   const dn=DIETS.find(d=>d[0]===S.diet);const sc=SCAN[scanMode];
   dbg('Sending… mime='+mealMime+', base64 length='+(mealB64?mealB64.length:0)+', key starts '+String(S.apiKey).slice(0,7)+'…');
   const prompt=`You are Alek, a warm weight-loss friend for ${S.name||'your friend'} doing a ${dn?dn[1]:'balanced'} approach (notes: ${S.notes||'none'}). ${sc.ask}
-Respond ONLY with JSON, no markdown: {"verdict":"good"|"mix"|"pass","headline":"one short friendly line","note":"2-4 warm, specific, non-shaming sentences. Friend tone, never preachy.","summary":"≤8 words plain summary of what was in the image for your own memory"}`;
+Respond ONLY with JSON, no markdown: {"verdict":"good"|"mix"|"pass","headline":"one short friendly line","note":"2-4 warm, specific, non-shaming sentences. Friend tone, never preachy.","summary":"≤8 words plain summary of what was in the image for your own memory","carbs":estimated grams of carbohydrates as a number,"meal":"breakfast"|"lunch"|"dinner"|"snack"}`;
   try{
     const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:aiHeaders(),body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:1000,messages:[{role:"user",content:[{type:"image",source:{type:"base64",media_type:mealMime,data:mealB64}},{type:"text",text:prompt}]}]})});
     const rawText=await r.text();
@@ -863,7 +937,12 @@ Respond ONLY with JSON, no markdown: {"verdict":"good"|"mix"|"pass","headline":"
     if(!txt){dbg('200 OK but no text in response. Raw:\n'+rawText.slice(0,400));}
     let o;try{o=JSON.parse(txt)}catch{o={verdict:'mix',headline:'Here’s my take',note:txt}}
     showVerdict(o);
-    if(o.summary){S.mealLog=S.mealLog||[];S.mealLog.push({mode:scanMode,summary:o.summary,d:today()});if(S.mealLog.length>40)S.mealLog=S.mealLog.slice(-40);save()}
+    if(o.summary){
+      S.mealLog=S.mealLog||[];S.mealLog.push({mode:scanMode,summary:o.summary,d:today()});if(S.mealLog.length>40)S.mealLog=S.mealLog.slice(-40);save();
+      // Also record in the daily journal so recaps and the Today card include photographed meals.
+      jAdd({type:'meal',summary:o.summary,meal:o.meal||'snack',carbs:(typeof o.carbs==='number'?Math.round(o.carbs):null),note:o.headline||''});
+      flicker('Logged: '+o.summary+(typeof o.carbs==='number'?' • ~'+Math.round(o.carbs)+'g carbs':''));
+    }
     if(S.voiceOn&&o.note)speak(o.headline+'. '+o.note);
   }catch(e){
     console.log('[Alek] threw',e);
@@ -895,9 +974,12 @@ function drawSpark(){
   pts.forEach((p,i)=>svg.innerHTML+=`<circle cx="${x(i)}" cy="${y(p.w)}" r="3.2" fill="#0E0F12" stroke="#EBD08A" stroke-width="2"/>`);
 }
 
-document.getElementById('reveal-file').addEventListener('change',async e=>{const f=e.target.files[0];if(!f)return;const {url}=await readImg(f,900);S.photos.push({url,d:today(),w:curW()});save();renderReveal();toast('Milestone photo saved 📸')});
-document.getElementById('why-photo-drop').addEventListener('click',e=>{if(e.target.id!=='why-file')document.getElementById('why-file').click()});
-document.getElementById('why-file').addEventListener('change',async e=>{const f=e.target.files[0];if(!f)return;const {url}=await readImg(f,1000);S.whyPhoto=url;save();renderYou();renderHome();toast('Photo saved to your why 🤍')});
+(function(){const b=document.getElementById('reveal-add-btn'),fi=document.getElementById('reveal-file');if(b&&fi)b.addEventListener('click',()=>fi.click());})();
+document.getElementById('reveal-file').addEventListener('change',async e=>{const f=e.target.files[0];if(!f)return;try{const {url}=await readImg(f,900);if(!url){toast('Could not load that photo');return;}S.photos.push({url,d:today(),w:curW()});save();renderReveal();toast('Milestone photo saved 📸')}catch(err){toast('Could not load that photo — try your library')}});
+(function(){const d=document.getElementById('why-photo-drop'),fi=document.getElementById('why-file');
+  if(d&&fi){const open=()=>fi.click();d.addEventListener('click',open);d.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();open();}});}
+})();
+document.getElementById('why-file').addEventListener('change',async e=>{const f=e.target.files[0];if(!f)return;try{const {url}=await readImg(f,1000);if(!url){toast('Could not load that photo — try another');return;}S.whyPhoto=url;save();renderYou();renderHome();toast('Photo saved to your why 🤍')}catch(err){toast('Could not load that photo — try picking from your library')}});
 function reachedGoal(){const c=curW();return S.goal&&c&&c<=S.goal}
 function renderReveal(){
   const g=document.getElementById('reveal-grid');const ph=S.photos;
@@ -1074,7 +1156,7 @@ function val(id){return document.getElementById(id).value.trim()}
 function num(id){const v=parseFloat(document.getElementById(id).value);return isNaN(v)?null:v}
 function fmtTime(t){let[h,m]=t.split(':').map(Number);const ap=h<12?'AM':'PM';h=h%12||12;return h+':'+String(m).padStart(2,'0')+' '+ap}
 
-const BUILD='build 2026-06-29 19:40 · agent log';
+const BUILD='build 2026-06-30 14:05 · bugfixes';
 try{const bs=document.getElementById('build-stamp');if(bs)bs.textContent=BUILD;}catch(_){}
 try{boot()}catch(e){try{document.getElementById('onboard').classList.remove('hidden')}catch(_){}}
 setTimeout(()=>{const sp=document.getElementById('splash');if(sp)sp.classList.add('gone');setTimeout(()=>{if(sp)sp.remove()},700)},1700);
