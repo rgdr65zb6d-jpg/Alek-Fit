@@ -450,6 +450,15 @@
     </section>
 
     <section class="view" id="v-you">
+      <div class="card" style="border:1.5px solid var(--gold)">
+        <p class="eyebrow">Troubleshooting</p>
+        <h2>Why isn't my food logging?</h2>
+        <p class="muted" style="margin-bottom:12px">Tap this. It sends a test meal to Alek's logging engine and shows exactly what happens — and whether it saves.</p>
+        <button class="btn gold" onclick="testLogger()">▶ Test logging engine</button>
+        <button class="btn ghost" style="margin-top:8px" onclick="runSelfTest()">Run full self-test (camera + API)</button>
+        <button class="btn ghost" style="margin-top:8px" onclick="forceReload()">↻ Force fresh reload (clear cache)</button>
+        <pre id="selftest-out" style="white-space:pre-wrap;font-size:12px;line-height:1.5;margin:12px 0 0;color:var(--ink-2);font-family:ui-monospace,Menlo,monospace"></pre>
+      </div>
       <div class="card">
         <p class="eyebrow">Check-ins</p>
         <h2>Daily reminders</h2>
@@ -466,13 +475,10 @@
         <button class="btn ghost" onclick="saveKey()">Save key</button>
         <p class="muted" id="key-status" style="margin-top:8px;font-size:11.5px"></p>
       </div>
-      <div class="card">
+      <div class="card" style="display:none">
         <p class="eyebrow">Diagnostics</p>
         <h2>Meal scanner self-test</h2>
         <p class="muted" style="margin-bottom:12px">If meal photos aren't working, tap this. It tests each step and shows exactly what fails.</p>
-        <button class="btn gold" onclick="runSelfTest()">Run self-test</button>
-        <button class="btn ghost" style="margin-top:8px" onclick="testLogger()">Test logging engine</button>
-        <pre id="selftest-out" style="white-space:pre-wrap;font-size:12px;line-height:1.5;margin:12px 0 0;color:var(--ink-2);font-family:ui-monospace,Menlo,monospace"></pre>
       </div>
       <div class="card">
         <p class="eyebrow">Voice</p>
@@ -1021,6 +1027,13 @@ function renderYou(){
   const wi=document.getElementById('why-input');if(wi)wi.value=S.whyText||'';
   const wd=document.getElementById('why-photo-drop'),wimg=document.getElementById('why-img');
   if(wd&&wimg){if(S.whyPhoto){wimg.src=S.whyPhoto;wd.classList.add('has')}else{wd.classList.remove('has')}}
+  // If nothing has ever logged, surface a hint in the diagnostic box automatically.
+  try{
+    const out=document.getElementById('selftest-out');
+    if(out&&!(S.journal||[]).length&&!out.textContent){
+      out.textContent='Tip: tap "▶ Test logging engine" above to see why food isn\'t logging. It runs a quick test and shows the result here.';
+    }
+  }catch(_){}
 }
 function saveWhy(){const wi=document.getElementById('why-input');S.whyText=(wi.value||'').trim();save();renderHome();toast(S.whyText||S.whyPhoto?'Your why is saved 🤍':'Cleared')}
 function toggleVoice(el){S.voiceOn=!S.voiceOn;el.classList.toggle('on',S.voiceOn);save();if(S.voiceOn){try{speechSynthesis.getVoices()}catch(e){}toast('Voice on — Alek will speak replies')}else{try{speechSynthesis.cancel()}catch(e){}toast('Voice off')}}
@@ -1029,6 +1042,14 @@ function addAlarm(title,time){toast('Open Clock → Alarms → + · set '+fmtTim
 function saveProfile(){S.goal=num('prof-goal');save();renderHome();toast('Plan updated')}
 function saveKey(){S.apiKey=val('prof-key');save();renderYou();toast(S.apiKey?'AI coach connected ✓':'Key cleared')}
 function wipe(){if(confirm('Erase everything on this device? This cannot be undone.')){try{localStorage.removeItem(KEY)}catch(e){}_mem={};S={...blank};location.reload()}}
+function forceReload(){
+  // Append a changing query string to defeat the WebView cache, then reload.
+  try{
+    const u=new URL(location.href);
+    u.searchParams.set('v',Date.now());
+    location.replace(u.toString());
+  }catch(e){location.reload(true);}
+}
 
 /* ---- DIAGNOSTICS: bisect the meal-scan pipeline, print results on screen ---- */
 const TEST_PNG='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='; // valid 1x1 red PNG
@@ -1222,7 +1243,7 @@ function val(id){return document.getElementById(id).value.trim()}
 function num(id){const v=parseFloat(document.getElementById(id).value);return isNaN(v)?null:v}
 function fmtTime(t){let[h,m]=t.split(':').map(Number);const ap=h<12?'AM':'PM';h=h%12||12;return h+':'+String(m).padStart(2,'0')+' '+ap}
 
-const BUILD='build 2026-06-30 14:30 · log-diagnostics';
+const BUILD='build 2026-06-30 15:10 · diag-visible';
 try{const bs=document.getElementById('build-stamp');if(bs)bs.textContent=BUILD;}catch(_){}
 try{boot()}catch(e){try{document.getElementById('onboard').classList.remove('hidden')}catch(_){}}
 setTimeout(()=>{const sp=document.getElementById('splash');if(sp)sp.classList.add('gone');setTimeout(()=>{if(sp)sp.remove()},700)},1700);
