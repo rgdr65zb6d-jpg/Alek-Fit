@@ -471,6 +471,7 @@
         <h2>Meal scanner self-test</h2>
         <p class="muted" style="margin-bottom:12px">If meal photos aren't working, tap this. It tests each step and shows exactly what fails.</p>
         <button class="btn gold" onclick="runSelfTest()">Run self-test</button>
+        <button class="btn ghost" style="margin-top:8px" onclick="testLogger()">Test logging engine</button>
         <pre id="selftest-out" style="white-space:pre-wrap;font-size:12px;line-height:1.5;margin:12px 0 0;color:var(--ink-2);font-family:ui-monospace,Menlo,monospace"></pre>
       </div>
       <div class="card">
@@ -842,24 +843,37 @@ function handleAgentTool(name,inp){
   return 'unknown tool';
 }
 let _agentBusy=false;
+let _agentDebug='';
+function agentDbg(s){_agentDebug=s;console.log('[Alek agent]',s);}
 async function runAgent(){
-  if(!S.apiKey||_agentBusy)return;_agentBusy=true;
+  if(!S.apiKey){agentDbg('no api key');return;}
+  if(_agentBusy){agentDbg('busy');return;}
+  _agentBusy=true;
   try{
     // Only look at the most recent exchange so we don't re-log old turns.
     // The API requires messages to START with a user role — trim any leading assistant turns.
     let recent=S.chat.slice(-6).map(m=>({role:m.role==='assistant'?'assistant':'user',content:m.text}));
     while(recent.length&&recent[0].role!=='user')recent.shift();
-    if(!recent.length)return;
+    if(!recent.length){agentDbg('no user messages in window');return;}
     const sys=`You are the silent logging engine behind Alek, a weight-loss companion for ${S.name||'the user'} (eating style: ${(DIETS.find(d=>d[0]===S.diet)||[])[1]||'balanced'}).
-Read ONLY the latest user message in context. If it mentions food eaten/about to be eaten, a weight number, a mood/energy/craving, or a clear win/struggle, call the matching tool(s) to log it. Estimate carbs from normal portions — never ask for clarification. If nothing is worth logging, respond with just the word NONE and call no tools. Do not write any other commentary. Never double-log something already clearly logged.`;
+Look at the conversation, focusing on the most recent user message. If it mentions food eaten or about to be eaten, a weight number, a mood/energy/craving, or a clear win/struggle, call the matching tool(s) to log it. Estimate carbs from normal portions — never ask for clarification. You MUST call a tool when the user mentions any food. If truly nothing is logworthy, reply with the single word NONE.`;
     const body={model:"claude-sonnet-4-6",max_tokens:600,system:sys,tools:AGENT_TOOLS,messages:recent};
     let r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:aiHeaders(),body:JSON.stringify(body)});
-    if(!r.ok)return;
-    let data=await r.json();
+    const raw=await r.text();
+    if(!r.ok){
+      let msg=raw;try{msg=(JSON.parse(raw).error||{}).message||raw;}catch{}
+      agentDbg('HTTP '+r.status+': '+msg);
+      return;
+    }
+    let data;try{data=JSON.parse(raw);}catch{agentDbg('bad json from agent: '+raw.slice(0,200));return;}
     const calls=(data.content||[]).filter(c=>c.type==='tool_use');
-    if(!calls.length)return;
-    for(const c of calls){handleAgentTool(c.name,c.input||{});}
-  }catch(e){/* logging is best-effort; never disrupt the chat */}
+    if(!calls.length){
+      const textOut=(data.content||[]).filter(c=>c.type==='text').map(c=>c.text).join('').trim();
+      agentDbg('no tool calls. stop_reason='+(data.stop_reason||'?')+' text="'+textOut.slice(0,80)+'"');
+      return;
+    }
+    for(const c of calls){const res=handleAgentTool(c.name,c.input||{});agentDbg('called '+c.name+' -> '+res);}
+  }catch(e){agentDbg('threw: '+(e&&e.message||e));}
   finally{_agentBusy=false;}
 }
 /* tiny non-intrusive confirmation that work happened */
@@ -1084,6 +1098,58 @@ async function runSelfTest(){
   log('Done.');
 }
 
+async function testLogger(){
+  const out=document.getElementById('selftest-out');const lines=[];
+  const log=s=>{lines.push(s);out.textContent=lines.join('\n');};
+  log('Testing the logging engine…');
+  if(!S.apiKey){log('✗ No API key. Add it above first.');return;}
+  const before=(S.journal||[]).length;
+  // Run the real agent on a fixed sentence by temporarily injecting it.
+  const sentence='I had two scrambled eggs and a slice of avocado toast for breakfast.';
+  log('Sending test sentence to the agent:');
+  log('  "'+sentence+'"');
+  try{
+    const sys=`You are the silent logging engine behind Alek. If the user mentions food eaten, call log_meal with an estimated carb count. You MUST call a tool when food is mentioned.`;
+    const body={model:"claude-sonnet-4-6",max_tokens:600,system:sys,tools:AGENT_TOOLS,messages:[{role:'user',content:sentence}]};
+    const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:aiHeaders(),body:JSON.stringify(body)});
+    const raw=await r.text();
+    log('HTTP '+r.status+' '+r.statusText);
+    if(!r.ok){
+      let msg=raw;try{msg=(JSON.parse(raw).error||{}).message||raw;}catch{}
+      log('✗ API rejected the tool call: '+msg);
+      if(/credit|balance/i.test(msg))log('→ Out of credits. The chat may still work from cache but tools cost extra.');
+      if(r.status===401)log('→ Key invalid.');
+      return;
+    }
+    let data;try{data=JSON.parse(raw);}catch{log('✗ Bad JSON: '+raw.slice(0,200));return;}
+    log('stop_reason: '+(data.stop_reason||'?'));
+    const calls=(data.content||[]).filter(c=>c.type==='tool_use');
+    const texts=(data.content||[]).filter(c=>c.type==='text').map(c=>c.text).join('');
+    log('Tool calls returned: '+calls.length);
+    if(texts)log('Model text: "'+texts.slice(0,120)+'"');
+    if(!calls.length){
+      log('✗ The model did NOT call a tool. This is the bug.');
+      log('→ The model saw the food but chose not to log. Likely the tools array');
+      log('  isn\'t being accepted, or the model needs a firmer instruction.');
+      return;
+    }
+    for(const c of calls){
+      log('✓ Called '+c.name+' with: '+JSON.stringify(c.input));
+      handleAgentTool(c.name,c.input||{});
+    }
+    const after=(S.journal||[]).length;
+    if(after>before){
+      log('✓✓ SUCCESS — '+(after-before)+' entry written to your journal.');
+      log('→ Check the Home tab, "Today · Alek\'s log". It should appear.');
+      log('  If chat still doesn\'t log, the issue was the message window; this proves the engine works.');
+    }else{
+      log('✗ Tool was called but nothing saved. Bug is in handleAgentTool/jAdd.');
+    }
+  }catch(e){
+    log('✗ fetch threw: '+(e&&e.message||e));
+    log('→ Network/CORS. Tools need the same connection as chat.');
+  }
+}
 /* The Anthropic API accepts jpeg, png, gif, webp.
    Strategy: try to re-encode to JPEG via canvas (handles HEIC + shrinks big photos).
    If canvas fails (common in iOS standalone Home-Screen WebView), fall back to sending
@@ -1156,7 +1222,7 @@ function val(id){return document.getElementById(id).value.trim()}
 function num(id){const v=parseFloat(document.getElementById(id).value);return isNaN(v)?null:v}
 function fmtTime(t){let[h,m]=t.split(':').map(Number);const ap=h<12?'AM':'PM';h=h%12||12;return h+':'+String(m).padStart(2,'0')+' '+ap}
 
-const BUILD='build 2026-06-30 14:05 · bugfixes';
+const BUILD='build 2026-06-30 14:30 · log-diagnostics';
 try{const bs=document.getElementById('build-stamp');if(bs)bs.textContent=BUILD;}catch(_){}
 try{boot()}catch(e){try{document.getElementById('onboard').classList.remove('hidden')}catch(_){}}
 setTimeout(()=>{const sp=document.getElementById('splash');if(sp)sp.classList.add('gone');setTimeout(()=>{if(sp)sp.remove()},700)},1700);
